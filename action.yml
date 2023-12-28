@@ -1,5 +1,5 @@
-name: "Jira Release Web Hook"
-description: "Creates a new Jira release and assigns all relevant issues to it."
+name: "Jira Release"
+description: "Creates a new Jira Release and assings all issues using a Web Hook"
 inputs:
   jira-project-key:
     description: "Jira project identifier"
@@ -7,37 +7,50 @@ inputs:
   jira-automation-webhook:
     description: "Jira automation webhook url"
     required: true
-  build-version:
-    description: "Version identifier"
-    required: true
 runs:
   using: "composite"
   steps:
-    - name: Fetch entire Git history (including tags)
-      run: git fetch --prune --unshallow --tags
-      shell: bash
+      - name: Fetch entire Git history (including tags)
+        run: git fetch --prune --unshallow --tags
+        shell: bash
 
-    - name: Set last and second to last
-      id: search-tags
-      run: |
-        latest_tag=$(git tag --sort=committerdate | tail -n 1)
-        previous_tag=$(git tag --sort=committerdate | tail -n 2 | head -n 1)
-        echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
-        echo "previous_tag=$previous_tag" >> $GITHUB_OUTPUT
-      shell: bash
+      - name: Filter Releases
+        id: filter_releases
+        run: |
+          releases=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100")
 
-    - name: Collect issue numbers since last release/tag
-      run: |
-        export LC_ALL=en_US.utf8
-        git log ${{ steps.search-tags.outputs.previous_tag }}..${{ steps.search-tags.outputs.latest_tag }} --oneline | \
-        grep -oE "${{ inputs.jira-project-key }}-[[:digit:]]{1,}" | sort | uniq | \
-        sed 's/^\|$/"/g' | paste -sd , | awk '{print "RELATED_JIRA_ISSUES="$0}' >> $GITHUB_ENV
-        echo "issues: ${{ env.RELATED_JIRA_ISSUES }}"
-      shell: bash
+          filtered_tags=$(echo "$releases" | jq -r --arg target_commitish "${{ github.event.release.target_commitish }}" \
+            '.[] | select(.target_commitish == $target_commitish) | .tag_name' | head -n 2)
+          latest_tag=$(echo "$filtered_tags" | head -n 1)
+          previous_tag=$(echo "$filtered_tags" | tail -n 1)
+          echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
+          echo "previous_tag=$previous_tag" >> $GITHUB_OUTPUT
+          echo $previous_tag
+          echo $latest_tag
+        shell: bash
 
-    - name: Create json and invoke webhook
-      run: |
-        $json = ConvertTo-Json @{issues = @(${{ env.RELATED_JIRA_ISSUES }}); data = @{version = "${{ inputs.build-version }}"; projectName = "${{ inputs.jira-project-key }}"}}
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-RestMethod ${{ inputs.jira-automation-webhook }} -Method Post -Body $json -ContentType "application/json"
-      shell: pwsh
+      - name: Collect issue numbers between two last tags from a same branch
+        run: |
+          export LC_ALL=en_US.utf8
+          if [ "${{ steps.filter_releases.outputs.latest_tag }}" = "${{ steps.filter_releases.outputs.previous_tag }}" ]; then
+              issues=$(git log ${{ steps.filter_releases.outputs.latest_tag }} --oneline)
+              echo "si"
+          else
+              issues=$(git log ${{ steps.filter_releases.outputs.previous_tag }}..${{ steps.filter_releases.outputs.latest_tag }} --oneline)
+              echo "no"
+          fi
+          echo "$issues"
+
+          echo "$issues" | \
+          grep -oE "${{ inputs.jira-project-key }}-[[:digit:]]{1,}" | sort | uniq | \
+          sed 's/^\|$/"/g' | paste -sd , | awk '{print "RELATED_JIRA_ISSUES="$0}' >> $GITHUB_ENV
+          echo "issues: ${{ env.RELATED_JIRA_ISSUES }}"
+        shell: bash
+
+      - name: Create json and invoke webhook
+        run: |
+          $json = ConvertTo-Json @{issues = @(${{ env.RELATED_JIRA_ISSUES }}); data = @{version = "${{ github.event.release.name }}"; projectName = "${{ inputs.jira-project-key }}"}}
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-RestMethod ${{ inputs.jira-automation-webhook }} -Method Post -Body $json -ContentType "application/json"
+        shell: pwsh
