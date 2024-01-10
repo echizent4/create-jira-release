@@ -53,4 +53,4 @@ runs:
           $json = ConvertTo-Json @{issues = @(${{ env.RELATED_JIRA_ISSUES }}); data = @{version = "${{ github.event.release.name }}"; projectName = "${{ inputs.jira-project-key }}"}}
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           Invoke-RestMethod ${{ inputs.jira-automation-webhook }} -Method Post -Body $json -ContentType "application/json"
-        shell: pwsh
+        shell: bash
