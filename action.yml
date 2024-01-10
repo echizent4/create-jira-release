@@ -50,7 +50,6 @@ runs:
 
       - name: Create json and invoke webhook
         run: |
-          $json = ConvertTo-Json @{issues = @(${{ env.RELATED_JIRA_ISSUES }}); data = @{version = "${{ github.event.release.name }}"; projectName = "${{ inputs.jira-project-key }}"}}
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          Invoke-RestMethod ${{ inputs.jira-automation-webhook }} -Method Post -Body $json -ContentType "application/json"
+          json=$(jq -n --arg issues "$RELATED_JIRA_ISSUES" --arg version "${{ github.event.release.name }}" --arg projectName "${{ inputs.jira-project-key }}" '{ issues: $issues | split(" "), data: { version: $version, projectName: $projectName } }' | tr -d '\n')
+          curl -X POST -H "Content-Type: application/json" -d "$json" "${{ inputs.jira-automation-webhook }}"
         shell: bash
